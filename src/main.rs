@@ -11,14 +11,26 @@ const DEBUG: bool = true;
 type PlayerID = usize;
 type Coord = usize;
 
+#[derive(Clone, Copy, Debug)]
+enum Direction {
+    XPos,
+    XNeg,
+    YPos,
+    YNeg,
+}
+
 #[derive(Clone)]
 struct Cell {
-    occupied_by: Option<PlayerID>,
+    claimed_by: Option<PlayerID>,
 }
 
 impl Cell {
     fn new() -> Cell {
-        Cell { occupied_by: None }
+        Cell { claimed_by: None }
+    }
+
+    fn claimed(&self) -> bool {
+        self.claimed_by.is_some()
     }
 }
 
@@ -32,6 +44,7 @@ struct Game {
     // other players - ID and name
     others: Vec<Option<String>>,
     world: Vec<Vec<Cell>>,
+    pos: (usize, usize),
 }
 
 impl Game {
@@ -51,6 +64,7 @@ impl Game {
             others: Vec::new(),
             // for performance sake, assume a big world from the get-go
             world: Vec::with_capacity(50^2),
+            pos: (0,0), // we assume our position will be updated soon
         }
     }
 
@@ -114,11 +128,11 @@ impl Game {
         // we assume that the player ID was known (i.e. we'll not be OOB)
         self.others[id] = None;
 
-        // free all cells that were occupied by the player
+        // free all cells that were claimed by the player
         for row in self.world.iter_mut() {
             for cell in row.iter_mut() {
-                if cell.occupied_by == Some(id) {
-                    cell.occupied_by = None;
+                if cell.claimed_by == Some(id) {
+                    cell.claimed_by = None;
                 }
             }
         }
@@ -134,12 +148,30 @@ impl Game {
     }
 
     fn occupy(&mut self, player_id: PlayerID, x: Coord, y: Coord) {
-        // we assume that the field is not yet occupied by anyone
-        self.world[x][y] = Cell { occupied_by: Some(player_id) };
+        // we assume that the field is not yet claimed by anyone
+        self.world[x][y] = Cell { claimed_by: Some(player_id) };
     }
 
     fn say(&mut self, msg: &str) {
         self.send("chat", Some(&[msg]));
+    }
+
+    fn print_world(&self) {
+        let expanse_x = self.world.len();
+        println!("World (expanse_x == {}):", expanse_x);
+        // we have to iterate backwards (using `rev()`) for correct orientation
+        for x in (0..expanse_x).rev() {
+            for y in (0..self.world[x].len()).rev() {
+                let cell = &self.world[x][y];
+                if cell.claimed() {
+                    print!("{:02}", cell.claimed_by.unwrap());
+                } else {
+                    print!("--");
+                }
+            }
+            println!()
+        }
+        println!("(My ID was {})", self.me.unwrap())
     }
 }
 
@@ -147,6 +179,24 @@ fn parse_msg_arg<T: FromStr>(arg: &str, err_msg: &str) -> T {
     let arg = arg.trim();
     arg.parse()
         .unwrap_or_else(|_| panic!("{}: \"{}\"", err_msg, arg))
+}
+
+fn beam(game: &Game, dir: Direction) -> usize {
+    // we assume that the world is the same size in all dimensions
+    let expanse = game.world.len();
+    let mut beam_len = 0;
+    for offset in 0..expanse-1 {
+        if !match dir {
+            // `+ expanse` in *Neg cases because we cannot underflow before the modulo op
+            Direction::XPos => game.world[(game.pos.0 + offset) % expanse][game.pos.1].claimed(),
+            Direction::XNeg => game.world[(game.pos.0 + expanse - offset) % expanse][game.pos.1].claimed(),
+            Direction::YPos => game.world[game.pos.0][(game.pos.1 + offset) % expanse].claimed(),
+            Direction::YNeg => game.world[game.pos.0][(game.pos.1 + expanse - offset) % expanse].claimed(),
+        } {
+            beam_len += 1;
+        }
+    }
+    beam_len
 }
 
 fn main() {
@@ -212,7 +262,27 @@ fn main() {
 
             // tick - make a move
             "tick" => {
-                game.send("move", Some(&["up"]));
+                // simple strategy - beam into all four directions
+                let mut best_dir = Direction::XPos;
+                let mut longest_beam = 0;
+                for dir in [Direction::XPos, Direction::XNeg, Direction::YPos, Direction::YNeg] {
+                    let beam = beam(&game, dir);
+                    if beam > longest_beam {
+                        best_dir = dir;
+                        longest_beam = beam;
+                    }
+                }
+                println!("Best direction to move into is: {:?}", best_dir);
+
+                // move into best direction
+                let direction_name = match best_dir {
+                    Direction::XPos => "down",
+                    Direction::XNeg => "up",
+                    Direction::YPos => "left",
+                    Direction::YNeg => "right",
+                };
+                println!("Moving {}", direction_name);
+                game.send("move", Some(&[direction_name]));
             }
 
             // register players
@@ -225,10 +295,20 @@ fn main() {
 
             // update blocked cells in the world
             "pos" => {
+
+                // occupy cell
                 let player_id = parse_msg_arg(msg_args[1], "Cannot parse player ID");
                 let x = parse_msg_arg(msg_args[2], "Cannot parse position (x)");
                 let y = parse_msg_arg(msg_args[3], "Cannot parse position (y)");
                 game.occupy(player_id, x, y);
+
+                // if the position relates to us, update our position
+                if game.me == Some(player_id) {
+                    if DEBUG {
+                        println!("We're currently at ({},{}).", x, y);
+                    }
+                    game.pos = (x,y);
+                }
             }
 
             // log chat messages
@@ -256,6 +336,7 @@ fn main() {
                 let won: u32 = parse_msg_arg(msg_args[1], "Cannot parse amount of wins");
                 let lost: u32 = parse_msg_arg(msg_args[2], "Cannot parse amount of losses");
                 println!("Lost. Won {} times, lost {} times.", won, lost);
+                game.print_world();
             }
 
             "win" => println!("THE VICTORY IS OURS!"),
