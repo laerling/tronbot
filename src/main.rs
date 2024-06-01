@@ -11,6 +11,17 @@ const DEBUG: bool = true;
 type PlayerID = usize;
 type Coord = usize;
 
+#[derive(Clone)]
+struct Cell {
+    occupied_by: Option<PlayerID>,
+}
+
+impl Cell {
+    fn new() -> Cell {
+        Cell { occupied_by: None }
+    }
+}
+
 struct Game {
     username: String,
     reader: BufReader<TcpStream>,
@@ -20,9 +31,7 @@ struct Game {
     me: Option<PlayerID>,
     // other players - ID and name
     others: Vec<Option<String>>,
-    // list of fields blocked by each player. We keep this list separate from the player ID/name
-    // list because we don't know whether we'll get others' name or coords first.
-    blocked: Vec<Vec<(Coord, Coord)>>,
+    world: Vec<Vec<Cell>>,
 }
 
 impl Game {
@@ -40,7 +49,8 @@ impl Game {
             read_buf: String::with_capacity(256),
             me: None,
             others: Vec::new(),
-            blocked: Vec::new(),
+            // for performance sake, assume a big world from the get-go
+            world: Vec::with_capacity(50^2),
         }
     }
 
@@ -54,7 +64,7 @@ impl Game {
         self.read_buf.clear();
         self.me = Some(me);
         self.others.clear();
-        self.blocked.clear();
+        self.world = vec![vec![Cell::new(); x]; y];
     }
 
     fn send(&mut self, msg_type: &str, msg_args: Option<&[&str]>) {
@@ -98,6 +108,22 @@ impl Game {
         }
     }
 
+    fn remove_player(&mut self, id: PlayerID) {
+
+        // remove player from the list of players
+        // we assume that the player ID was known (i.e. we'll not be OOB)
+        self.others[id] = None;
+
+        // free all cells that were occupied by the player
+        for row in self.world.iter_mut() {
+            for cell in row.iter_mut() {
+                if cell.occupied_by == Some(id) {
+                    cell.occupied_by = None;
+                }
+            }
+        }
+    }
+
     fn get_player_name(&self, player_id: PlayerID) -> Option<&str> {
         match self.others.iter().nth(player_id) {
             // we can't use flatten() because we're not dealing with Option<Option<T>> but
@@ -107,18 +133,9 @@ impl Game {
         }
     }
 
-    fn block(&mut self, player_id: PlayerID, x: Coord, y: Coord) {
-        if self.blocked.iter().nth(player_id) == None {
-                // make sure player ID is contained
-                let min_len = player_id + 1;
-                if self.blocked.len() < min_len {
-                    self.blocked.push(Vec::new());
-                }
-                self.blocked[player_id] = vec![(x,y)];
-        } else {
-            // TODO maybe check whether that field already blocked (should be unnecessary though)
-            self.blocked[player_id].push((x,y));
-        }
+    fn occupy(&mut self, player_id: PlayerID, x: Coord, y: Coord) {
+        // we assume that the field is not yet occupied by anyone
+        self.world[x][y] = Cell { occupied_by: Some(player_id) };
     }
 
     fn say(&mut self, msg: &str) {
@@ -206,12 +223,12 @@ fn main() {
                 game.add_player(id, name);
             }
 
-            // update blocked fields
+            // update blocked cells in the world
             "pos" => {
                 let player_id = parse_msg_arg(msg_args[1], "Cannot parse player ID");
                 let x = parse_msg_arg(msg_args[2], "Cannot parse position (x)");
                 let y = parse_msg_arg(msg_args[3], "Cannot parse position (y)");
-                game.block(player_id, x, y);
+                game.occupy(player_id, x, y);
             }
 
             // log chat messages
@@ -231,8 +248,8 @@ fn main() {
                     None => String::from("UNKNOWN"),
                     Some(n) => format!("\"{}\"", n),
                 };
-                println!("Player {} (\"{}\") died. Removing their blocked fields.", id, name);
-                game.blocked[id].clear();
+                println!("Player {} (\"{}\") died. Removing their blocked cells.", id, name);
+                game.remove_player(id);
             }
 
             "lose" => {
