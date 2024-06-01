@@ -221,6 +221,16 @@ fn main() {
                 println!("Player {} ({}) said: \"{}\"", id, name, msg);
             }
 
+            "die" => {
+                let id: PlayerID = parse_msg_arg(msg_args[1], "Cannot parse player ID");
+                let name: String = match game.get_player_name(id) {
+                    None => String::from("UNKNOWN"),
+                    Some(n) => format!("\"{}\"", n),
+                };
+                println!("Player {} (\"{}\") died. Removing their blocked fields.", id, name);
+                game.blocked[id as usize].clear();
+            }
+
             "lose" => {
                 let won: u32 = parse_msg_arg(msg_args[1], "Cannot parse amount of wins");
                 let lost: u32 = parse_msg_arg(msg_args[2], "Cannot parse amount of losses");
