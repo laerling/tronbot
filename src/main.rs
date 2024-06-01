@@ -3,6 +3,9 @@ use std::io::{BufRead, BufReader, Write};
 use std::iter::Iterator;
 use std::net::TcpStream;
 use std::str::FromStr;
+use std::sync::mpsc::{channel, TryRecvError};
+use std::thread;
+use std::time::Duration;
 
 const SERVER_ADDR: &str = "151.216.74.213:4000";
 const USERNAME: &str = "MASTER CONTROL PROGRAM";
@@ -50,8 +53,11 @@ struct Game {
 impl Game {
     fn new(username: &str) -> Self {
         // connect to server
-        println!("Connecting to server");
-        let stream = TcpStream::connect(SERVER_ADDR).expect("Cannot connect to server");
+        println!("Connecting to server: {}", SERVER_ADDR);
+        let addr = SERVER_ADDR.parse()
+            .unwrap_or_else(|_| panic!("Cannot parse server address: {}", SERVER_ADDR));
+        let stream = TcpStream::connect_timeout(&addr, Duration::new(10, 0))
+            .expect("Cannot connect to server");
         let r = BufReader::new(stream.try_clone().expect("Cannot clone TCPStream"));
 
         // return game object
@@ -221,18 +227,38 @@ fn main() {
     // count empty messages
     let mut empty_msgs = 0;
 
+    // spawn canary thread
+    let (canary_tx, canary_rx) = channel();
+    thread::spawn(move || {
+        // block until user hits enter
+        let mut buf = String::new();
+        let _ = std::io::stdin().read_line(&mut buf);
+        println!("Canary thread got input line. Telling main thread to exit.");
+        let _ = canary_tx.send(());
+    });
+
     // read loop
     loop {
+
+        // check whether canary thread told us to exit
+        match canary_rx.try_recv() {
+            Ok(_) => {
+                println!("Canary thread got input. Main thread exiting.");
+                return;
+            },
+            Err(TryRecvError::Disconnected) => panic!("Canary thread channel got disconnected"),
+            Err(TryRecvError::Empty) => { /* we live another tick */ },
+        };
+
         // read from server
         let msg = game.receive();
 
         // ignore empty messages
         if msg.is_empty() {
+            println!("Got empty message. Ignoring. Got {} empty messages so far btw.",
+                empty_msgs);
             empty_msgs += 1;
             continue;
-        }
-        if empty_msgs > 0 {
-            println!("Got {} empty messages so far", empty_msgs);
         }
 
         // parse message
