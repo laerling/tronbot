@@ -244,10 +244,6 @@ fn main() {
     // read loop
     loop {
 
-        if DEBUG {
-            game.print_world();
-        }
-
         // check whether canary thread told us to exit
         match canary_rx.try_recv() {
             Ok(_) => {
@@ -296,6 +292,10 @@ fn main() {
 
             // tick - make a move
             "tick" => {
+                if DEBUG {
+                    game.print_world();
+                }
+
                 // simple strategy - beam into all four directions
                 let mut best_dir = Direction::WPos;
                 let mut longest_beam = 0;
