@@ -8,8 +8,8 @@ const SERVER_ADDR: &str = "151.216.74.213:4000";
 const USERNAME: &str = "MASTER CONTROL PROGRAM";
 const DEBUG: bool = true;
 
-type PlayerID = u8;
-type COORD = u8;
+type PlayerID = usize;
+type Coord = usize;
 
 struct Game {
     username: String,
@@ -22,7 +22,7 @@ struct Game {
     others: Vec<Option<String>>,
     // list of fields blocked by each player. We keep this list separate from the player ID/name
     // list because we don't know whether we'll get others' name or coords first.
-    blocked: Vec<Vec<(COORD, COORD)>>,
+    blocked: Vec<Vec<(Coord, Coord)>>,
 }
 
 impl Game {
@@ -50,9 +50,9 @@ impl Game {
         self.send("join", Some(&[usr.as_str(), pas]));
     }
 
-    fn reset(&mut self) {
+    fn reset(&mut self, x: Coord, y: Coord, me: PlayerID) {
         self.read_buf.clear();
-        self.me = None;
+        self.me = Some(me);
         self.others.clear();
         self.blocked.clear();
     }
@@ -88,18 +88,18 @@ impl Game {
             self.me = Some(id);
         } else {
             // make sure player ID is contained
-            let min_len = id as usize + 1;
+            let min_len = id + 1;
             while self.others.len() < min_len {
                 self.others.push(None);
             }
-            if self.others[id as usize] == None {
-                self.others[id as usize] = Some(name);
+            if self.others[id] == None {
+                self.others[id] = Some(name);
             }
         }
     }
 
     fn get_player_name(&self, player_id: PlayerID) -> Option<&str> {
-        match self.others.iter().nth(player_id as usize) {
+        match self.others.iter().nth(player_id) {
             // we can't use flatten() because we're not dealing with Option<Option<T>> but
             // Option<&Option<T>> m(
             None | Some(None) => None,
@@ -107,17 +107,17 @@ impl Game {
         }
     }
 
-    fn block(&mut self, player_id: PlayerID, x: COORD, y: COORD) {
-        if self.blocked.iter().nth(player_id as usize) == None {
+    fn block(&mut self, player_id: PlayerID, x: Coord, y: Coord) {
+        if self.blocked.iter().nth(player_id) == None {
                 // make sure player ID is contained
-                let min_len = player_id as usize + 1;
+                let min_len = player_id + 1;
                 if self.blocked.len() < min_len {
                     self.blocked.push(Vec::new());
                 }
-                self.blocked[player_id as usize] = vec![(x,y)];
+                self.blocked[player_id] = vec![(x,y)];
         } else {
             // TODO maybe check whether that field already blocked (should be unnecessary though)
-            self.blocked[player_id as usize].push((x,y));
+            self.blocked[player_id].push((x,y));
         }
     }
 
@@ -185,7 +185,11 @@ fn main() {
             // new game - reset game state
             "game" => {
                 println!("\nNew game has started!");
-                game.reset();
+                let w = parse_msg_arg(msg_args[1], "Cannot parse map width");
+                let h = parse_msg_arg(msg_args[2], "Cannot parse map height");
+                let id = parse_msg_arg(msg_args[3], "Cannot parse ID");
+                // we're arbitrarily assigning x to be the width and y to be the height
+                game.reset(w, h, id);
                 game.say("You shouldn't have come back, Flynn.");
             }
 
@@ -228,7 +232,7 @@ fn main() {
                     Some(n) => format!("\"{}\"", n),
                 };
                 println!("Player {} (\"{}\") died. Removing their blocked fields.", id, name);
-                game.blocked[id as usize].clear();
+                game.blocked[id].clear();
             }
 
             "lose" => {
