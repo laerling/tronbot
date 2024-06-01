@@ -241,6 +241,8 @@ fn main() {
                 println!("Lost. Won {} times, lost {} times.", won, lost);
             }
 
+            "win" => println!("THE VICTORY IS OURS!"),
+
             // NOP messages
             _ => {}
         };
