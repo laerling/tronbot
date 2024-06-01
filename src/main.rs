@@ -16,10 +16,10 @@ type Coord = usize;
 
 #[derive(Clone, Copy, Debug)]
 enum Direction {
-    XPos,
-    XNeg,
-    YPos,
-    YNeg,
+    WPos,
+    WNeg,
+    HPos,
+    HNeg,
 }
 
 #[derive(Clone)]
@@ -46,7 +46,7 @@ struct Game {
     me: Option<PlayerID>,
     // other players - ID and name
     others: Vec<Option<String>>,
-    world: Vec<Vec<Cell>>,
+    world: Vec<Vec<Cell>>, // semantic: [width_offset][height_offset]
     pos: (usize, usize),
 }
 
@@ -80,11 +80,11 @@ impl Game {
         self.send("join", Some(&[usr.as_str(), pas]));
     }
 
-    fn reset(&mut self, x: Coord, y: Coord, me: PlayerID) {
+    fn reset(&mut self, width: Coord, height: Coord, me: PlayerID) {
         self.read_buf.clear();
         self.me = Some(me);
         self.others.clear();
-        self.world = vec![vec![Cell::new(); x]; y];
+        self.world = vec![vec![Cell::new(); height]; width];
     }
 
     fn send(&mut self, msg_type: &str, msg_args: Option<&[&str]>) {
@@ -135,8 +135,8 @@ impl Game {
         self.others[id] = None;
 
         // free all cells that were claimed by the player
-        for row in self.world.iter_mut() {
-            for cell in row.iter_mut() {
+        for column in self.world.iter_mut() {
+            for cell in column.iter_mut() {
                 if cell.claimed_by == Some(id) {
                     cell.claimed_by = None;
                 }
@@ -153,9 +153,9 @@ impl Game {
         }
     }
 
-    fn occupy(&mut self, player_id: PlayerID, x: Coord, y: Coord) {
+    fn occupy(&mut self, player_id: PlayerID, w: Coord, h: Coord) {
         // we assume that the field is not yet claimed by anyone
-        self.world[x][y] = Cell { claimed_by: Some(player_id) };
+        self.world[w][h] = Cell { claimed_by: Some(player_id) };
     }
 
     fn say(&mut self, msg: &str) {
@@ -163,12 +163,12 @@ impl Game {
     }
 
     fn print_world(&self) {
-        let expanse_x = self.world.len();
-        println!("World (expanse_x == {}):", expanse_x);
+        let expanse_w = self.world.len();
+        println!("World (expanse_w == {}):", expanse_w);
         // we have to iterate backwards (using `rev()`) for correct orientation
-        for x in (0..expanse_x).rev() {
-            for y in (0..self.world[x].len()).rev() {
-                let cell = &self.world[x][y];
+        for w in (0..expanse_w).rev() {
+            for h in (0..self.world[w].len()).rev() {
+                let cell = &self.world[w][h];
                 if cell.claimed() {
                     print!("{:02}", cell.claimed_by.unwrap());
                 } else {
@@ -177,7 +177,11 @@ impl Game {
             }
             println!()
         }
-        println!("(My ID was {})", self.me.unwrap())
+        if self.me.is_some() {
+            println!("(My ID was {})", self.me.unwrap());
+        } else {
+            println!("(My ID was not set yet)");
+        }
     }
 }
 
@@ -194,10 +198,10 @@ fn beam(game: &Game, dir: Direction) -> usize {
     for offset in 0..expanse-1 {
         if !match dir {
             // `+ expanse` in *Neg cases because we cannot underflow before the modulo op
-            Direction::XPos => game.world[(game.pos.0 + offset) % expanse][game.pos.1].claimed(),
-            Direction::XNeg => game.world[(game.pos.0 + expanse - offset) % expanse][game.pos.1].claimed(),
-            Direction::YPos => game.world[game.pos.0][(game.pos.1 + offset) % expanse].claimed(),
-            Direction::YNeg => game.world[game.pos.0][(game.pos.1 + expanse - offset) % expanse].claimed(),
+            Direction::WPos => game.world[(game.pos.0 + offset) % expanse][game.pos.1].claimed(),
+            Direction::WNeg => game.world[(game.pos.0 + expanse - offset) % expanse][game.pos.1].claimed(),
+            Direction::HPos => game.world[game.pos.0][(game.pos.1 + offset) % expanse].claimed(),
+            Direction::HNeg => game.world[game.pos.0][(game.pos.1 + expanse - offset) % expanse].claimed(),
         } {
             beam_len += 1;
         }
@@ -240,6 +244,10 @@ fn main() {
     // read loop
     loop {
 
+        if DEBUG {
+            game.print_world();
+        }
+
         // check whether canary thread told us to exit
         match canary_rx.try_recv() {
             Ok(_) => {
@@ -277,21 +285,21 @@ fn main() {
 
             // new game - reset game state
             "game" => {
-                println!("\nNew game has started!");
-                let w = parse_msg_arg(msg_args[1], "Cannot parse map width");
-                let h = parse_msg_arg(msg_args[2], "Cannot parse map height");
+                let width = parse_msg_arg(msg_args[1], "Cannot parse map width");
+                let height = parse_msg_arg(msg_args[2], "Cannot parse map height");
                 let id = parse_msg_arg(msg_args[3], "Cannot parse ID");
-                // we're arbitrarily assigning x to be the width and y to be the height
-                game.reset(w, h, id);
+                println!("\nNew game has started! The world has a width of {} and a height of {}",
+                    width, height);
+                game.reset(width, height, id);
                 game.say("You shouldn't have come back, Flynn.");
             }
 
             // tick - make a move
             "tick" => {
                 // simple strategy - beam into all four directions
-                let mut best_dir = Direction::XPos;
+                let mut best_dir = Direction::WPos;
                 let mut longest_beam = 0;
-                for dir in [Direction::XPos, Direction::XNeg, Direction::YPos, Direction::YNeg] {
+                for dir in [Direction::WPos, Direction::WNeg, Direction::HPos, Direction::HNeg] {
                     let beam = beam(&game, dir);
                     if beam > longest_beam {
                         best_dir = dir;
@@ -302,10 +310,10 @@ fn main() {
 
                 // move into best direction
                 let direction_name = match best_dir {
-                    Direction::XPos => "down",
-                    Direction::XNeg => "up",
-                    Direction::YPos => "left",
-                    Direction::YNeg => "right",
+                    Direction::WPos => "right",
+                    Direction::WNeg => "left",
+                    Direction::HPos => "up",
+                    Direction::HNeg => "down",
                 };
                 println!("Moving {}", direction_name);
                 game.send("move", Some(&[direction_name]));
@@ -319,10 +327,10 @@ fn main() {
                 game.add_player(id, name);
             }
 
-            // update blocked cells in the world
+            // update claimed cells in the world
             "pos" => {
 
-                // occupy cell
+                // claim cell
                 let player_id = parse_msg_arg(msg_args[1], "Cannot parse player ID");
                 let x = parse_msg_arg(msg_args[2], "Cannot parse position (x)");
                 let y = parse_msg_arg(msg_args[3], "Cannot parse position (y)");
