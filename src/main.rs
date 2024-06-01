@@ -163,11 +163,10 @@ impl Game {
     }
 
     fn print_world(&self) {
-        let expanse_w = self.world.len();
-        println!("World (expanse_w == {}):", expanse_w);
-        // we have to iterate backwards (using `rev()`) for correct orientation
-        for w in (0..expanse_w).rev() {
-            for h in (0..self.world[w].len()).rev() {
+        let expanse = self.world.len();
+        println!("World (expanse == {}):", expanse);
+        for w in 0..expanse {
+            for h in 0..expanse {
                 let cell = &self.world[w][h];
                 if cell.claimed() {
                     print!("{:02}", cell.claimed_by.unwrap());
