@@ -8,16 +8,19 @@ const SERVER_ADDR: &str = "151.216.74.213:4000";
 const USERNAME: &str = "MASTER CONTROL PROGRAM";
 const DEBUG: bool = true;
 
+type PLAYER_ID = u8;
+type COORD = u8;
+
 struct Game {
     reader: BufReader<TcpStream>,
     writer: TcpStream,
     read_buf: String,
-    // blocked fields on the grid
-    blocked: Vec<(u8, u8)>,
+    // list of players, each one with the fields they block
+    blocked: Vec<(String, Vec<(COORD, COORD)>)>,
     // our ID - None means we don't know our ID yet
-    me: Option<u8>,
+    me: Option<PLAYER_ID>,
     // other players - ID and name
-    others: Vec<(u8, String)>,
+    others: Vec<(PLAYER_ID, String)>,
 }
 
 impl Game {
@@ -75,7 +78,7 @@ impl Game {
         &self.read_buf
     }
 
-    fn add_player(&mut self, id: u8, name: String) {
+    fn add_player(&mut self, id: PLAYER_ID, name: String) {
         if name == USERNAME {
             println!("Found my ID: {}", id);
             self.me = Some(id);
@@ -84,7 +87,7 @@ impl Game {
         }
     }
 
-    fn block(&mut self, x: u8, y: u8) {
+    fn block(&mut self, player_id: PLAYER_ID, x: COORD, y: COORD) {
         // TODO maybe check whether it's already blocked (should be unnecessary though)
         self.blocked.push((x, y));
     }
@@ -179,8 +182,8 @@ fn main() {
 
             // log chat messages
             "chat" => {
-                let player_id: u8 = parse_msg_arg(msg_args[1], "Cannot parse player ID");
-                let msg: u8 = parse_msg_arg(msg_args[2], "Cannot parse message from player");
+                let player_id: PLAYER_ID = parse_msg_arg(msg_args[1], "Cannot parse player ID");
+                let msg = msg_args[2].trim();
                 // TODO look up name of player
                 println!("Player {} said: \"{}\"", player_id, msg);
             }
