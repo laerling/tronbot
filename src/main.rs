@@ -1,30 +1,32 @@
+use std::fs::read_to_string;
 use std::io::{BufRead, BufReader, Write};
 use std::iter::Iterator;
 use std::net::TcpStream;
 use std::str::FromStr;
-use std::fs::read_to_string;
 
 const SERVER_ADDR: &str = "151.216.74.213:4000";
 const USERNAME: &str = "MASTER CONTROL PROGRAM";
 const DEBUG: bool = true;
 
-type PLAYER_ID = u8;
+type PlayerID = u8;
 type COORD = u8;
 
 struct Game {
+    username: String,
     reader: BufReader<TcpStream>,
     writer: TcpStream,
     read_buf: String,
-    // list of players, each one with the fields they block
-    blocked: Vec<(String, Vec<(COORD, COORD)>)>,
     // our ID - None means we don't know our ID yet
-    me: Option<PLAYER_ID>,
+    me: Option<PlayerID>,
     // other players - ID and name
-    others: Vec<(PLAYER_ID, String)>,
+    others: Vec<Option<String>>,
+    // list of fields blocked by each player. We keep this list separate from the player ID/name
+    // list because we don't know whether we'll get others' name or coords first.
+    blocked: Vec<Vec<(COORD, COORD)>>,
 }
 
 impl Game {
-    fn new() -> Self {
+    fn new(username: &str) -> Self {
         // connect to server
         println!("Connecting to server");
         let stream = TcpStream::connect(SERVER_ADDR).expect("Cannot connect to server");
@@ -32,25 +34,27 @@ impl Game {
 
         // return game object
         Game {
+            username: String::from(username),
             reader: r,
             writer: stream,
             read_buf: String::with_capacity(256),
-            blocked: Vec::new(),
             me: None,
             others: Vec::new(),
+            blocked: Vec::new(),
         }
     }
 
-    fn join(&mut self, user: &str, pas: &str) {
+    fn join(&mut self, pas: &str) {
         println!("Sending JOIN to join next game");
-        self.send("join", Some(&[user, pas]));
+        let usr = self.username.clone();
+        self.send("join", Some(&[usr.as_str(), pas]));
     }
 
     fn reset(&mut self) {
         self.read_buf.clear();
-        self.blocked.clear();
         self.me = None;
-        self.others.clear()
+        self.others.clear();
+        self.blocked.clear();
     }
 
     fn send(&mut self, msg_type: &str, msg_args: Option<&[&str]>) {
@@ -78,18 +82,43 @@ impl Game {
         &self.read_buf
     }
 
-    fn add_player(&mut self, id: PLAYER_ID, name: String) {
-        if name == USERNAME {
+    fn add_player(&mut self, id: PlayerID, name: String) {
+        if name == self.username {
             println!("Found my ID: {}", id);
             self.me = Some(id);
-        } else if !self.others.iter().any(|id_name| id_name.0 == id) {
-            self.others.push((id, name));
+        } else {
+            // make sure player ID is contained
+            let min_len = id as usize + 1;
+            while self.others.len() < min_len {
+                self.others.push(None);
+            }
+            if self.others[id as usize] == None {
+                self.others[id as usize] = Some(name);
+            }
         }
     }
 
-    fn block(&mut self, player_id: PLAYER_ID, x: COORD, y: COORD) {
-        // TODO maybe check whether it's already blocked (should be unnecessary though)
-        self.blocked.push((x, y));
+    fn get_player_name(&self, player_id: PlayerID) -> Option<&str> {
+        match self.others.iter().nth(player_id as usize) {
+            // we can't use flatten() because we're not dealing with Option<Option<T>> but
+            // Option<&Option<T>> m(
+            None | Some(None) => None,
+            Some(Some(s)) => Some(s.as_str())
+        }
+    }
+
+    fn block(&mut self, player_id: PlayerID, x: COORD, y: COORD) {
+        if self.blocked.iter().nth(player_id as usize) == None {
+                // make sure player ID is contained
+                let min_len = player_id as usize + 1;
+                if self.blocked.len() < min_len {
+                    self.blocked.push(Vec::new());
+                }
+                self.blocked[player_id as usize] = vec![(x,y)];
+        } else {
+            // TODO maybe check whether that field already blocked (should be unnecessary though)
+            self.blocked[player_id as usize].push((x,y));
+        }
     }
 
     fn say(&mut self, msg: &str) {
@@ -117,10 +146,10 @@ fn main() {
     let password = password.trim();
 
     // connect to server
-    let mut game = Game::new();
+    let mut game = Game::new(username);
 
     // join next game
-    game.join(USERNAME, password);
+    game.join(password);
 
     // count empty messages
     let mut empty_msgs = 0;
@@ -175,17 +204,21 @@ fn main() {
 
             // update blocked fields
             "pos" => {
-                let x = parse_msg_arg(msg_args[1], "Cannot parse position (x)");
-                let y = parse_msg_arg(msg_args[2], "Cannot parse position (y)");
-                game.block(x, y);
+                let player_id = parse_msg_arg(msg_args[1], "Cannot parse player ID");
+                let x = parse_msg_arg(msg_args[2], "Cannot parse position (x)");
+                let y = parse_msg_arg(msg_args[3], "Cannot parse position (y)");
+                game.block(player_id, x, y);
             }
 
             // log chat messages
             "chat" => {
-                let player_id: PLAYER_ID = parse_msg_arg(msg_args[1], "Cannot parse player ID");
-                let msg = msg_args[2].trim();
-                // TODO look up name of player
-                println!("Player {} said: \"{}\"", player_id, msg);
+                let id: PlayerID = parse_msg_arg(msg_args[1], "Cannot parse player ID");
+                let msg = String::from(msg_args[2].trim());
+                let name: String = match game.get_player_name(id) {
+                    None => String::from("UNKNOWN"),
+                    Some(n) => format!("\"{}\"", n),
+                };
+                println!("Player {} ({}) said: \"{}\"", id, name, msg);
             }
 
             "lose" => {
